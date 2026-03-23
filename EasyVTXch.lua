@@ -167,25 +167,19 @@ local function saveFieldCache()
   end
   local f = io.open(FIELD_CACHE_PATH, "w")
   if not f then return end
-  -- Line 1: vtx,band,channel,power,send,count  (power=0 means not found)
+  -- Format: vtx,band,channel,power,send,count  (power=0 means not found)
   io.write(f, tostring(crsf.vtxFolderId) .. ","
     .. tostring(crsf.bandFieldId) .. ","
     .. tostring(crsf.channelFieldId) .. ","
     .. tostring(crsf.powerFieldId or 0) .. ","
     .. tostring(crsf.sendFieldId) .. ","
     .. tostring(crsf.fieldCount) .. "\n")
-  -- Line 2: last known VTX state (band letter, channel number, power index)
-  if crsf.currentBand and crsf.currentChannel then
-    io.write(f, tostring(crsf.currentBand) .. ","
-      .. tostring(crsf.currentChannel) .. ","
-      .. tostring(crsf.currentPower ~= nil and crsf.currentPower or "") .. "\n")
-  end
   io.close(f)
 end
 local function loadFieldCache()
   local f = io.open(FIELD_CACHE_PATH, "r")
   if not f then return nil end
-  local buf = io.read(f, 256) or ""
+  local buf = io.read(f, 128) or ""
   io.close(f)
   -- Require exactly "num,num,num,num,num,num" format (6 fields incl. power)
   local v1, v2, v3, v4, v5, v6 = string.match(buf, "^(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)")
@@ -195,19 +189,6 @@ local function loadFieldCache()
     channel = tonumber(v3), power = tonumber(v4),
     send = tonumber(v5), count = tonumber(v6),
   }
-end
-local function loadLastSettings()
-  local f = io.open(FIELD_CACHE_PATH, "r")
-  if not f then return end
-  local buf = io.read(f, 256) or ""
-  io.close(f)
-  -- Parse line 2: band letter, channel, optional power index
-  local band, ch, pwr = string.match(buf, "\n([A-Z]),(%d+),(%-?%d*)\n?")
-  if band and ch then
-    crsf.currentBand    = band
-    crsf.currentChannel = tonumber(ch)
-    crsf.currentPower   = tonumber(pwr)  -- nil if pwr string is empty
-  end
 end
 ---- [4] CRSF Communication ----
 local findVtxFields
@@ -419,6 +400,7 @@ local function parseFieldData(fieldId, d)
         if b and c then
           crsf.currentBand = b
           crsf.currentChannel = tonumber(c)
+          refreshUi()  -- show VTX admin band/channel immediately
         end
       end
     elseif crsf.vtxFolderId and field.parent == crsf.vtxFolderId then
@@ -432,6 +414,7 @@ local function parseFieldData(fieldId, d)
         crsf.powerOptions = makePowerOptions(field)
         if field.value ~= nil then
           crsf.currentPower = field.value - (field.min or 0)
+          refreshUi()  -- show VTX admin power immediately
         end
         bwItemsDirty = true
       elseif string.find(n, "send") then
@@ -586,7 +569,6 @@ local function continueApply()
     pending.power = nil
     crsf.state = State.READY
     statusText = "Sent!"
-    saveFieldCache()
     refreshUi()
   end
 end
@@ -898,7 +880,6 @@ end
 ---- [9] init / run ----
 local function init()
   loadFavorites()
-  loadLastSettings()  -- show last known VTX settings before connecting
   if lvgl ~= nil then
     buildUi()
   end
