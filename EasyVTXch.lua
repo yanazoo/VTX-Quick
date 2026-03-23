@@ -407,14 +407,25 @@ local function parseFieldData(fieldId, d)
       local n = string.lower(field.name)
       if n == "band" then
         crsf.bandFieldId = fieldId
+        if field.value ~= nil then
+          local idx = field.value - (field.min or 0) + 1
+          if BAND_NAMES[idx] then
+            crsf.currentBand = BAND_NAMES[idx]
+            refreshUi()
+          end
+        end
       elseif n == "channel" then
         crsf.channelFieldId = fieldId
+        if field.value ~= nil then
+          crsf.currentChannel = field.value - (field.min or 0) + 1
+          refreshUi()
+        end
       elseif string.find(n, "power") or string.find(n, "pwr") then
         crsf.powerFieldId = fieldId
         crsf.powerOptions = makePowerOptions(field)
         if field.value ~= nil then
           crsf.currentPower = field.value - (field.min or 0)
-          refreshUi()  -- show VTX admin power immediately
+          refreshUi()
         end
         bwItemsDirty = true
       elseif string.find(n, "send") then
@@ -468,8 +479,15 @@ findVtxFields = function()
       local n = type(f.name) == "string" and string.lower(f.name) or ""
       if n == "band" then
         crsf.bandFieldId = id
+        if f.value ~= nil then
+          local idx = f.value - (f.min or 0) + 1
+          if BAND_NAMES[idx] then crsf.currentBand = BAND_NAMES[idx] end
+        end
       elseif n == "channel" then
         crsf.channelFieldId = id
+        if f.value ~= nil then
+          crsf.currentChannel = f.value - (f.min or 0) + 1
+        end
       elseif string.find(n, "power") or string.find(n, "pwr") then
         crsf.powerFieldId = id
         crsf.powerOptions = makePowerOptions(f)
