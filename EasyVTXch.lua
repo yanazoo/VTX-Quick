@@ -39,7 +39,6 @@ local TIMEOUT_ENUM = 100   -- 100 * 10ms = 1s per field
 local TIMEOUT_WRITE = 15   -- 15 * 10ms = 150ms between writes
 local TIMEOUT_SEND  = 20   -- 20 * 10ms = 200ms for send command
 local RETRY_MAX = 10
-local FIELD_CACHE_PATH = "/SCRIPTS/TOOLS/easyvtxch.cache"
 ---- [2] State ----
 local State = {
   IDLE          = 0,
@@ -67,7 +66,6 @@ local crsf = {
   channelFieldId = nil,
   powerFieldId   = nil,
   sendFieldId    = nil,
-  verifyCache    = nil,
   currentBand    = nil,
   currentChannel = nil,
   currentPower   = nil,   -- 0-based index into powerOptions
@@ -160,36 +158,6 @@ local function toggleFavorite(band, ch)
   saveFavorites()
   return wasAdded
 end
----- [3.5] Field ID Cache ----
-local function saveFieldCache()
-  if not (crsf.vtxFolderId and crsf.bandFieldId and crsf.channelFieldId and crsf.sendFieldId) then
-    return
-  end
-  local f = io.open(FIELD_CACHE_PATH, "w")
-  if not f then return end
-  -- Format: vtx,band,channel,power,send,count  (power=0 means not found)
-  io.write(f, tostring(crsf.vtxFolderId) .. ","
-    .. tostring(crsf.bandFieldId) .. ","
-    .. tostring(crsf.channelFieldId) .. ","
-    .. tostring(crsf.powerFieldId or 0) .. ","
-    .. tostring(crsf.sendFieldId) .. ","
-    .. tostring(crsf.fieldCount) .. "\n")
-  io.close(f)
-end
-local function loadFieldCache()
-  local f = io.open(FIELD_CACHE_PATH, "r")
-  if not f then return nil end
-  local buf = io.read(f, 128) or ""
-  io.close(f)
-  -- Require exactly "num,num,num,num,num,num" format (6 fields incl. power)
-  local v1, v2, v3, v4, v5, v6 = string.match(buf, "^(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)")
-  if not v1 then return nil end
-  return {
-    vtx = tonumber(v1), band = tonumber(v2),
-    channel = tonumber(v3), power = tonumber(v4),
-    send = tonumber(v5), count = tonumber(v6),
-  }
-end
 ---- [4] CRSF Communication ----
 local findVtxFields
 local refreshUi
@@ -266,7 +234,6 @@ local function startFullEnumeration()
   crsf.powerFieldId   = nil
   crsf.sendFieldId    = nil
   crsf.powerOptions   = {}
-  crsf.verifyCache    = nil
   crsf.currentBand    = nil
   crsf.currentChannel = nil
   crsf.currentPower   = nil
@@ -275,49 +242,8 @@ local function startFullEnumeration()
   requestField(1)
 end
 local function requestNextField()
-  -- Cache verification mode: read cached field IDs one by one
-  if crsf.verifyCache then
-    local cache = crsf.verifyCache
-    local f = crsf.fields[cache.vtx]
-    if f then
-      -- VTX folder loaded — verify it's actually a VTX folder
-      if not (f.type == TYPE_FOLDER and type(f.name) == "string" and string.find(f.name, "VTX")) then
-        startFullEnumeration()
-        return
-      end
-      if not crsf.fields[cache.band] then
-        requestField(cache.band)
-        return
-      end
-      if not crsf.fields[cache.channel] then
-        requestField(cache.channel)
-        return
-      end
-      -- Load power field if present in cache
-      if cache.power and cache.power > 0 and not crsf.fields[cache.power] then
-        requestField(cache.power)
-        return
-      end
-      if not crsf.fields[cache.send] then
-        requestField(cache.send)
-        return
-      end
-      -- All cached fields loaded
-      if allVtxFieldsFound() then
-        crsf.verifyCache = nil
-        crsf.state = State.READY
-        statusText = "Ready"
-        refreshUi()
-        return
-      end
-      startFullEnumeration()
-      return
-    end
-    return
-  end
   -- Early termination: all required VTX fields found, skip remaining
   if allVtxFieldsFound() then
-    saveFieldCache()
     crsf.state = State.READY
     statusText = "Ready"
     refreshUi()
@@ -343,19 +269,6 @@ local function parseDeviceInfo(data)
   if crsf.fieldCount == 0 then
     statusText = "No fields found"
     crsf.state = State.ERROR
-    return
-  end
-  local cache = loadFieldCache()
-  if cache and cache.count == crsf.fieldCount then
-    crsf.vtxFolderId    = cache.vtx
-    crsf.bandFieldId    = nil
-    crsf.channelFieldId = nil
-    crsf.powerFieldId   = nil
-    crsf.sendFieldId    = nil
-    crsf.state = State.ENUMERATING
-    crsf.fields = {}
-    crsf.verifyCache = cache
-    requestField(cache.vtx)
     return
   end
   statusText = "Loading fields..."
@@ -505,7 +418,6 @@ findVtxFields = function()
     crsf.state = State.ERROR
     return
   end
-  saveFieldCache()
   crsf.state = State.READY
   statusText = "Ready"
   refreshUi()
@@ -623,11 +535,7 @@ local function processCrsf()
       crsf.state = State.ERROR
     end
   elseif crsf.state == State.ENUMERATING and elapsed > TIMEOUT_ENUM then
-    if crsf.verifyCache then
-      startFullEnumeration()
-    else
-      requestField(crsf.loadIdx)
-    end
+    requestField(crsf.loadIdx)
   elseif crsf.state >= State.WRITING_BAND and crsf.state <= State.CONFIRMING then
     local timeout = (crsf.state <= State.WRITING_POWER) and TIMEOUT_WRITE or TIMEOUT_SEND
     if elapsed > timeout then
