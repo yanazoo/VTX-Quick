@@ -400,11 +400,9 @@ local function parseParamInfo(data)
     if not crsf.vtxFolderId then
       local rawType = crsf.chunkBuf[2]
       local ft = rawType and (rawType % 128) or 255
-      local fname = fieldGetString(crsf.chunkBuf, 3)
-      local isVtxFolder = (ft == TYPE_FOLDER and fname and string.find(fname, "VTX"))
+      local isVtxFolder = ft == TYPE_FOLDER
+        and string.find(fieldGetString(crsf.chunkBuf, 3) or "", "VTX")
       if not isVtxFolder then
-        -- Not a VTX folder — skip remaining chunks and move on
-        log("skip chunks for field " .. fieldId .. " (" .. tostring(fname) .. ")")
         requestNextField()
         return
       end
