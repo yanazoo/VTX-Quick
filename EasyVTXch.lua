@@ -34,6 +34,7 @@ local FREQ = {
   R = { 5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917 },
 }
 local FAV_PATH = "/SCRIPTS/TOOLS/easyvtxch.fav"
+local LOG_PATH = "/SCRIPTS/TOOLS/easyvtxch.log"
 local TIMEOUT_PING = 20    -- 20 * 10ms = 200ms per retry (total 2s with 10 retries)
 local TIMEOUT_ENUM = 100   -- 100 * 10ms = 1s per field
 local TIMEOUT_WRITE = 15   -- 15 * 10ms = 150ms between writes
@@ -208,6 +209,15 @@ local function makePowerOptions(field)
   end
   return opts
 end
+---- [3.5] Debug Log ----
+local logFile = io.open(LOG_PATH, "w")
+if logFile then io.close(logFile) end  -- truncate on start
+local function log(msg)
+  local f = io.open(LOG_PATH, "a")
+  if not f then return end
+  io.write(f, tostring(msg) .. "\n")
+  io.close(f)
+end
 local function sendPing()
   crsfPush(CMD_PING, { 0x00, CRSF_ADDR_RADIO })
   crsf.timer = getTime()
@@ -244,6 +254,9 @@ end
 local function requestNextField()
   -- Early termination: all required VTX fields found, skip remaining
   if allVtxFieldsFound() then
+    log("READY: band=" .. tostring(crsf.currentBand)
+      .. " ch=" .. tostring(crsf.currentChannel)
+      .. " pwr=" .. tostring(crsf.currentPower))
     crsf.state = State.READY
     statusText = "Ready"
     refreshUi()
@@ -266,6 +279,7 @@ local function parseDeviceInfo(data)
   else
     crsf.fieldCount = 0
   end
+  log("deviceInfo: fieldCount=" .. crsf.fieldCount)
   if crsf.fieldCount == 0 then
     statusText = "No fields found"
     crsf.state = State.ERROR
@@ -306,45 +320,63 @@ local function parseFieldData(fieldId, d)
     if i <= #d then field.info, i = fieldGetString(d, i) end
   end
   crsf.fields[fieldId] = field
+  log("field " .. fieldId .. " type=" .. field.type .. " name=" .. tostring(field.name)
+    .. " parent=" .. tostring(field.parent)
+    .. " val=" .. tostring(field.value)
+    .. " min=" .. tostring(field.min)
+    .. " max=" .. tostring(field.max)
+    .. (field.options and (" opts=" .. field.options) or "")
+    .. (field.dynName and (" dyn=" .. field.dynName) or ""))
   -- Early detection: check if this field is VTX-related
   if type(field.name) == "string" then
     if field.type == TYPE_FOLDER and string.find(field.name, "VTX") then
       crsf.vtxFolderId = fieldId
+      log("VTX folder found: id=" .. fieldId)
       if type(field.dynName) == "string" then
         local b, c = string.match(field.dynName, "%((%a):(%d+)")
         if b and c then
           crsf.currentBand = b
           crsf.currentChannel = tonumber(c)
-          refreshUi()  -- show VTX admin band/channel immediately
+          log("dynName band=" .. b .. " ch=" .. c)
+          refreshUi()
         end
       end
     elseif crsf.vtxFolderId and field.parent == crsf.vtxFolderId then
       local n = string.lower(field.name)
       if n == "band" then
         crsf.bandFieldId = fieldId
+        log("band field: val=" .. tostring(field.value) .. " min=" .. tostring(field.min))
         if field.value ~= nil then
           local idx = field.value - (field.min or 0) + 1
           if BAND_NAMES[idx] then
             crsf.currentBand = BAND_NAMES[idx]
+            log("currentBand=" .. crsf.currentBand)
             refreshUi()
+          else
+            log("band idx out of range: " .. idx)
           end
         end
       elseif n == "channel" then
         crsf.channelFieldId = fieldId
+        log("channel field: val=" .. tostring(field.value) .. " min=" .. tostring(field.min))
         if field.value ~= nil then
           crsf.currentChannel = field.value - (field.min or 0) + 1
+          log("currentChannel=" .. crsf.currentChannel)
           refreshUi()
         end
       elseif string.find(n, "power") or string.find(n, "pwr") then
         crsf.powerFieldId = fieldId
         crsf.powerOptions = makePowerOptions(field)
+        log("power field: val=" .. tostring(field.value) .. " opts=" .. tostring(field.options))
         if field.value ~= nil then
           crsf.currentPower = field.value - (field.min or 0)
+          log("currentPower=" .. crsf.currentPower)
           refreshUi()
         end
         bwItemsDirty = true
       elseif string.find(n, "send") then
         crsf.sendFieldId = fieldId
+        log("send field: id=" .. fieldId)
       end
     end
   end
@@ -416,10 +448,16 @@ findVtxFields = function()
     end
   end
   if not (crsf.bandFieldId and crsf.channelFieldId and crsf.sendFieldId) then
+    log("findVtxFields incomplete: band=" .. tostring(crsf.bandFieldId)
+      .. " ch=" .. tostring(crsf.channelFieldId)
+      .. " send=" .. tostring(crsf.sendFieldId))
     statusText = "VTX fields incomplete"
     crsf.state = State.ERROR
     return
   end
+  log("findVtxFields READY: band=" .. tostring(crsf.currentBand)
+    .. " ch=" .. tostring(crsf.currentChannel)
+    .. " pwr=" .. tostring(crsf.currentPower))
   crsf.state = State.READY
   statusText = "Ready"
   refreshUi()
