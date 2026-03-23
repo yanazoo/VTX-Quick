@@ -227,6 +227,19 @@ local function parsePowerOptions(optStr)
   end
   return opts
 end
+local function makePowerOptions(field)
+  local opts = parsePowerOptions(field and field.options)
+  if #opts > 0 then return opts end
+  -- TYPE_UINT8 fallback: generate "Lv.1" ... "Lv.N" from min/max
+  local fmin = (field and field.min) or 0
+  local fmax = (field and field.max) or 0
+  if fmax >= fmin and (fmax - fmin) <= 15 then
+    for v = fmin, fmax do
+      opts[#opts + 1] = "Lv." .. tostring(v - fmin + 1)
+    end
+  end
+  return opts
+end
 local function sendPing()
   crsfPush(CMD_PING, { 0x00, CRSF_ADDR_RADIO })
   crsf.timer = getTime()
@@ -395,9 +408,9 @@ local function parseFieldData(fieldId, d)
         crsf.bandFieldId = fieldId
       elseif n == "channel" then
         crsf.channelFieldId = fieldId
-      elseif string.find(n, "power") or n == "pwr" then
+      elseif string.find(n, "power") or string.find(n, "pwr") then
         crsf.powerFieldId = fieldId
-        crsf.powerOptions = parsePowerOptions(field.options)
+        crsf.powerOptions = makePowerOptions(field)
         if field.value ~= nil then
           crsf.currentPower = field.value - (field.min or 0)
         end
@@ -455,9 +468,9 @@ findVtxFields = function()
         crsf.bandFieldId = id
       elseif n == "channel" then
         crsf.channelFieldId = id
-      elseif string.find(n, "power") or n == "pwr" then
+      elseif string.find(n, "power") or string.find(n, "pwr") then
         crsf.powerFieldId = id
-        crsf.powerOptions = parsePowerOptions(f.options)
+        crsf.powerOptions = makePowerOptions(f)
         if f.value ~= nil then
           crsf.currentPower = f.value - (f.min or 0)
         end
