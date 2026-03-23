@@ -1,13 +1,14 @@
 -- toolName = "TNS|EasyVTXch|TNE"
 --
 -- EasyVTXch - Simplified VTX Channel Changer for EdgeTX + ELRS
--- One-tap VTX channel changing with favorites support.
+-- One-tap VTX channel/power changing with favorites support.
 -- Requires: EdgeTX 2.11+ (LVGL) for color UI, ELRS TX module
 --
 -- Usage:
 --   Tap a channel button to send VTX command immediately.
 --   Long-press a channel button to toggle favorite.
 --   Favorites appear at the top for quick access.
+--   Tap a power button to change VTX output power.
 ---- [1] Constants ----
 local CRSF_ADDR_MODULE = 0xEE
 local CRSF_ADDR_LUA    = 0xEF
@@ -46,10 +47,11 @@ local State = {
   ENUMERATING   = 2,
   READY         = 3,
   WRITING_BAND  = 4,
-  WRITING_CHAN   = 5,
-  WRITING_SEND  = 6,
-  CONFIRMING    = 7,
-  ERROR         = 8,
+  WRITING_CHAN  = 5,
+  WRITING_POWER = 6,
+  WRITING_SEND  = 7,
+  CONFIRMING    = 8,
+  ERROR         = 9,
 }
 local crsf = {
   state        = State.IDLE,
@@ -63,14 +65,17 @@ local crsf = {
   vtxFolderId    = nil,
   bandFieldId    = nil,
   channelFieldId = nil,
+  powerFieldId   = nil,
   sendFieldId    = nil,
-  verifyCache    = nil,  -- set during cache verification
+  verifyCache    = nil,
   currentBand    = nil,
   currentChannel = nil,
+  currentPower   = nil,   -- 0-based index into powerOptions
+  powerOptions   = {},    -- { "25mW", "100mW", ... }
   timer      = 0,
   retryCount = 0,
 }
-local pending = { band = nil, channel = nil }
+local pending = { band = nil, channel = nil, power = nil }
 local statusText = "Connecting..."
 local selectedBand = "R"
 local favorites = {}
@@ -162,9 +167,11 @@ local function saveFieldCache()
   end
   local f = io.open(FIELD_CACHE_PATH, "w")
   if not f then return end
+  -- Format: vtx,band,channel,power,send,count  (power=0 means not found)
   io.write(f, tostring(crsf.vtxFolderId) .. ","
     .. tostring(crsf.bandFieldId) .. ","
     .. tostring(crsf.channelFieldId) .. ","
+    .. tostring(crsf.powerFieldId or 0) .. ","
     .. tostring(crsf.sendFieldId) .. ","
     .. tostring(crsf.fieldCount) .. "\n")
   io.close(f)
@@ -174,13 +181,13 @@ local function loadFieldCache()
   if not f then return nil end
   local buf = io.read(f, 128) or ""
   io.close(f)
-  -- Require exactly "num,num,num,num,num" format to reject corrupt files
-  local v1, v2, v3, v4, v5 = string.match(buf, "^(%d+),(%d+),(%d+),(%d+),(%d+)")
+  -- Require exactly "num,num,num,num,num,num" format (6 fields incl. power)
+  local v1, v2, v3, v4, v5, v6 = string.match(buf, "^(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)")
   if not v1 then return nil end
   return {
     vtx = tonumber(v1), band = tonumber(v2),
-    channel = tonumber(v3), send = tonumber(v4),
-    count = tonumber(v5),
+    channel = tonumber(v3), power = tonumber(v4),
+    send = tonumber(v5), count = tonumber(v6),
   }
 end
 ---- [4] CRSF Communication ----
@@ -212,6 +219,14 @@ local function crsfPop()
   end
   return nil
 end
+local function parsePowerOptions(optStr)
+  local opts = {}
+  if not optStr or optStr == "" then return opts end
+  for opt in string.gmatch(optStr .. ";", "([^;]*);") do
+    if opt ~= "" then opts[#opts + 1] = opt end
+  end
+  return opts
+end
 local function sendPing()
   crsfPush(CMD_PING, { 0x00, CRSF_ADDR_RADIO })
   crsf.timer = getTime()
@@ -232,13 +247,16 @@ local function allVtxFieldsFound()
 end
 local function startFullEnumeration()
   statusText = "Loading fields..."
-  crsf.vtxFolderId = nil
-  crsf.bandFieldId = nil
+  crsf.vtxFolderId    = nil
+  crsf.bandFieldId    = nil
   crsf.channelFieldId = nil
-  crsf.sendFieldId = nil
-  crsf.verifyCache = nil
-  crsf.currentBand = nil
+  crsf.powerFieldId   = nil
+  crsf.sendFieldId    = nil
+  crsf.powerOptions   = {}
+  crsf.verifyCache    = nil
+  crsf.currentBand    = nil
   crsf.currentChannel = nil
+  crsf.currentPower   = nil
   crsf.loadIdx = 0
   crsf.fields = {}
   requestField(1)
@@ -251,11 +269,9 @@ local function requestNextField()
     if f then
       -- VTX folder loaded — verify it's actually a VTX folder
       if not (f.type == TYPE_FOLDER and type(f.name) == "string" and string.find(f.name, "VTX")) then
-        -- Cache invalid, fall back to full enumeration
         startFullEnumeration()
         return
       end
-      -- VTX folder verified, now load child fields if not yet loaded
       if not crsf.fields[cache.band] then
         requestField(cache.band)
         return
@@ -264,11 +280,16 @@ local function requestNextField()
         requestField(cache.channel)
         return
       end
+      -- Load power field if present in cache
+      if cache.power and cache.power > 0 and not crsf.fields[cache.power] then
+        requestField(cache.power)
+        return
+      end
       if not crsf.fields[cache.send] then
         requestField(cache.send)
         return
       end
-      -- All cached fields loaded and VTX fields matched by early detection
+      -- All cached fields loaded
       if allVtxFieldsFound() then
         crsf.verifyCache = nil
         crsf.state = State.READY
@@ -276,14 +297,12 @@ local function requestNextField()
         refreshUi()
         return
       end
-      -- Fields loaded but didn't match — cache stale
       startFullEnumeration()
       return
     end
-    -- VTX folder not yet loaded, keep waiting (requestField already called)
     return
   end
-  -- Early termination: all VTX fields found, skip remaining
+  -- Early termination: all required VTX fields found, skip remaining
   if allVtxFieldsFound() then
     saveFieldCache()
     crsf.state = State.READY
@@ -313,15 +332,13 @@ local function parseDeviceInfo(data)
     crsf.state = State.ERROR
     return
   end
-  -- Try cached field IDs first (skip full enumeration)
   local cache = loadFieldCache()
   if cache and cache.count == crsf.fieldCount then
-    -- Only set vtxFolderId for folder verification;
-    -- band/channel/send stay nil — early detection in parseFieldData must confirm them
-    crsf.vtxFolderId = cache.vtx
-    crsf.bandFieldId = nil
+    crsf.vtxFolderId    = cache.vtx
+    crsf.bandFieldId    = nil
     crsf.channelFieldId = nil
-    crsf.sendFieldId = nil
+    crsf.powerFieldId   = nil
+    crsf.sendFieldId    = nil
     crsf.state = State.ENUMERATING
     crsf.fields = {}
     crsf.verifyCache = cache
@@ -378,6 +395,13 @@ local function parseFieldData(fieldId, d)
         crsf.bandFieldId = fieldId
       elseif n == "channel" then
         crsf.channelFieldId = fieldId
+      elseif string.find(n, "power") or n == "pwr" then
+        crsf.powerFieldId = fieldId
+        crsf.powerOptions = parsePowerOptions(field.options)
+        if field.value ~= nil then
+          crsf.currentPower = field.value - (field.min or 0)
+        end
+        bwItemsDirty = true
       elseif string.find(n, "send") then
         crsf.sendFieldId = fieldId
       end
@@ -431,6 +455,13 @@ findVtxFields = function()
         crsf.bandFieldId = id
       elseif n == "channel" then
         crsf.channelFieldId = id
+      elseif string.find(n, "power") or n == "pwr" then
+        crsf.powerFieldId = id
+        crsf.powerOptions = parsePowerOptions(f.options)
+        if f.value ~= nil then
+          crsf.currentPower = f.value - (f.min or 0)
+        end
+        bwItemsDirty = true
       elseif string.find(n, "send") then
         crsf.sendFieldId = id
       end
@@ -449,7 +480,11 @@ end
 local function getCurrentText()
   if crsf.currentBand and crsf.currentChannel then
     local freq = getFreq(crsf.currentBand, crsf.currentChannel)
-    return crsf.currentBand .. crsf.currentChannel .. " " .. freq .. "MHz"
+    local pwr = ""
+    if crsf.currentPower ~= nil and crsf.powerOptions[crsf.currentPower + 1] then
+      pwr = " " .. crsf.powerOptions[crsf.currentPower + 1]
+    end
+    return crsf.currentBand .. crsf.currentChannel .. " " .. freq .. "MHz" .. pwr
   end
   return ""
 end
@@ -470,25 +505,45 @@ local function sendChannel(band, ch)
   if not bandVal then return end
   pending.band = band
   pending.channel = ch
+  pending.power = nil
   statusText = "Setting " .. band .. ch .. "..."
   writeParam(crsf.bandFieldId, bandVal, State.WRITING_BAND)
 end
+local function sendPower(pwrIdx)
+  if crsf.state ~= State.READY then return end
+  if not crsf.powerFieldId then return end
+  local pwrField = crsf.fields[crsf.powerFieldId]
+  local pwrMin = (pwrField and pwrField.min) or 0
+  pending.power = pwrIdx
+  pending.band = nil
+  pending.channel = nil
+  local label = crsf.powerOptions[pwrIdx + 1] or tostring(pwrIdx)
+  statusText = "Setting " .. label .. "..."
+  writeParam(crsf.powerFieldId, pwrMin + pwrIdx, State.WRITING_POWER)
+end
 local function continueApply()
   if crsf.state == State.WRITING_BAND then
-    -- Convert UI channel (1-8) to CRSF value using discovered field.min
-    -- ELRS field is 1-based (min=1, max=8); firmware converts internally
     local chanField = crsf.fields[crsf.channelFieldId]
     local chanMin = (chanField and chanField.min) or 0
     writeParam(crsf.channelFieldId, chanMin + (pending.channel - 1), State.WRITING_CHAN)
   elseif crsf.state == State.WRITING_CHAN then
     writeParam(crsf.sendFieldId, LCS_START, State.WRITING_SEND)
+  elseif crsf.state == State.WRITING_POWER then
+    writeParam(crsf.sendFieldId, LCS_START, State.WRITING_SEND)
   elseif crsf.state == State.WRITING_SEND then
     writeParam(crsf.sendFieldId, LCS_CONFIRMED, State.CONFIRMING)
   elseif crsf.state == State.CONFIRMING then
-    crsf.currentBand = pending.band
-    crsf.currentChannel = pending.channel
+    if pending.band then
+      crsf.currentBand = pending.band
+      crsf.currentChannel = pending.channel
+    end
+    if pending.power ~= nil then
+      crsf.currentPower = pending.power
+      bwItemsDirty = true
+    end
     pending.band = nil
     pending.channel = nil
+    pending.power = nil
     crsf.state = State.READY
     statusText = "Sent!"
     refreshUi()
@@ -505,11 +560,11 @@ local function processCrsf()
       if crsf.state == State.ENUMERATING then
         parseParamInfo(data)
       elseif crsf.state >= State.WRITING_BAND and crsf.state <= State.CONFIRMING then
-        -- Verify response is for the field we're writing
         local respFieldId = data and data[3]
         local expectedId =
-          (crsf.state == State.WRITING_BAND and crsf.bandFieldId) or
-          (crsf.state == State.WRITING_CHAN and crsf.channelFieldId) or
+          (crsf.state == State.WRITING_BAND  and crsf.bandFieldId) or
+          (crsf.state == State.WRITING_CHAN   and crsf.channelFieldId) or
+          (crsf.state == State.WRITING_POWER  and crsf.powerFieldId) or
           crsf.sendFieldId
         if respFieldId == expectedId then
           continueApply()
@@ -528,13 +583,12 @@ local function processCrsf()
     end
   elseif crsf.state == State.ENUMERATING and elapsed > TIMEOUT_ENUM then
     if crsf.verifyCache then
-      -- Cache verification field not responding — abandon cache
       startFullEnumeration()
     else
       requestField(crsf.loadIdx)
     end
   elseif crsf.state >= State.WRITING_BAND and crsf.state <= State.CONFIRMING then
-    local timeout = (crsf.state <= State.WRITING_CHAN) and TIMEOUT_WRITE or TIMEOUT_SEND
+    local timeout = (crsf.state <= State.WRITING_POWER) and TIMEOUT_WRITE or TIMEOUT_SEND
     if elapsed > timeout then
       continueApply()
     end
@@ -544,8 +598,8 @@ end
 -- Screen-adaptive layout (TX16S: 480x272, TX16S MK3: 800x480, etc.)
 local SW = LCD_W or 480
 local SH = LCD_H or 272
-local PAD = 4  -- lvgl.PAD_SMALL = 4px
-local MARGIN = 6  -- padding around UI edges
+local PAD = 4
+local MARGIN = 6
 local contentW = SW - MARGIN * 2
 local colCount = 4
 local favBtnW = math.floor((contentW - PAD * (colCount - 1)) / colCount)
@@ -554,6 +608,7 @@ local bandBtnW = math.floor((contentW - PAD * 4) / 5)
 local bandBtnH = math.max(28, math.floor(SH * 0.103))
 local chanBtnW = favBtnW
 local chanBtnH = favBtnH
+local infoPanelH = math.max(32, math.floor(SH * 0.118))
 local function isReady()
   return crsf.state == State.READY
 end
@@ -561,13 +616,26 @@ local function isConnected()
   return crsf.state >= State.READY
 end
 local ui = {
-  bandBtns = {},  -- { [bandName] = btn }
+  bandBtns = {},
 }
-local bandDirty = false  -- track if band changed (save on exit)
+local bandDirty = false
 local function updateBandUi()
   bandDirty = true
   bwItemsDirty = true
   dirtyAll = true
+end
+local function buildCurrentInfoText()
+  if not (crsf.currentBand and crsf.currentChannel) then
+    return statusText
+  end
+  local freq = getFreq(crsf.currentBand, crsf.currentChannel)
+  local line = "Band: " .. crsf.currentBand
+    .. "  Ch: " .. crsf.currentChannel
+    .. "  Freq: " .. freq .. " MHz"
+  if crsf.currentPower ~= nil and crsf.powerOptions[crsf.currentPower + 1] then
+    line = line .. "  Power: " .. crsf.powerOptions[crsf.currentPower + 1]
+  end
+  return line
 end
 local function buildUi()
   if lvgl == nil then return end
@@ -575,7 +643,6 @@ local function buildUi()
   ui.bandBtns = {}
   local sub = getCurrentText()
   if sub == "" then sub = statusText end
-  -- No flex on page: body has 0 padding, width = LCD_W
   local page = lvgl.page({
     title = "EasyVTXch",
     subtitle = sub,
@@ -584,7 +651,14 @@ local function buildUi()
     end,
   })
   local y = MARGIN
-  -- Favorites grid (absolute positioning, no flex nesting)
+  -- ── Current Settings Panel ──────────────────────────────────────
+  page:label({
+    x = MARGIN, y = y,
+    w = contentW, h = infoPanelH,
+    text = buildCurrentInfoText(),
+  })
+  y = y + infoPanelH + PAD
+  -- ── Favorites grid ──────────────────────────────────────────────
   if #favorites > 0 then
     for rowStart = 1, #favorites, colCount do
       for i = rowStart, math.min(rowStart + colCount - 1, #favorites) do
@@ -607,7 +681,7 @@ local function buildUi()
     end
     y = y + PAD
   end
-  -- Band selector
+  -- ── Band selector ───────────────────────────────────────────────
   for bi, bname in ipairs(BAND_NAMES) do
     local b = bname
     local btn = page:button({
@@ -625,7 +699,25 @@ local function buildUi()
     ui.bandBtns[b] = btn
   end
   y = y + bandBtnH + PAD * 2
-  -- Channel grid (2 rows x 4 cols)
+  -- ── Power selector (shown only when power field is available) ────
+  if crsf.powerFieldId and #crsf.powerOptions > 0 then
+    local numPwr = #crsf.powerOptions
+    local pwrBtnW = math.floor((contentW - PAD * (numPwr - 1)) / numPwr)
+    for pi, pname in ipairs(crsf.powerOptions) do
+      local pidx = pi - 1  -- 0-based
+      page:button({
+        x = MARGIN + (pi - 1) * (pwrBtnW + PAD), y = y,
+        w = pwrBtnW, h = bandBtnH,
+        text = pname,
+        checked = (crsf.currentPower == pidx),
+        visible = isConnected,
+        active = isReady,
+        press = function() sendPower(pidx) end,
+      })
+    end
+    y = y + bandBtnH + PAD * 2
+  end
+  -- ── Channel grid (2 rows × 4 cols) ──────────────────────────────
   for ch = 1, 8 do
     local c = ch
     local col = (c - 1) % 4
@@ -645,7 +737,7 @@ local function buildUi()
     })
   end
   local bottomY = y + (chanBtnH + PAD) * 2
-  -- Retry button
+  -- ── Retry button ────────────────────────────────────────────────
   local retryW = math.floor(contentW * 0.4)
   page:button({
     x = MARGIN + math.floor((contentW - retryW) / 2),
@@ -658,7 +750,6 @@ local function buildUi()
       sendPing()
     end,
   })
-  -- Bottom spacer (extends scrollable area for bottom margin)
   page:label({ x = 0, y = bottomY + MARGIN, h = 1, text = "" })
 end
 ---- [8] B&W Fallback (128x64) ----
@@ -670,6 +761,19 @@ local bwItemsCache = {}
 local function getBwItems()
   if not bwItemsDirty then return bwItemsCache end
   bwItemsCache = {}
+  -- Power options at top of list
+  if crsf.powerFieldId and #crsf.powerOptions > 0 then
+    for pi, pname in ipairs(crsf.powerOptions) do
+      local pidx = pi - 1
+      local mark = (crsf.currentPower == pidx) and ">" or " "
+      bwItemsCache[#bwItemsCache + 1] = {
+        label = mark .. "P:" .. pname,
+        isPower = true,
+        powerIdx = pidx,
+      }
+    end
+  end
+  -- Favorites
   for _, fav in ipairs(favorites) do
     bwItemsCache[#bwItemsCache + 1] = {
       label = "* " .. fav.band .. fav.channel .. " " .. getFreq(fav.band, fav.channel),
@@ -677,6 +781,7 @@ local function getBwItems()
       channel = fav.channel,
     }
   end
+  -- Channels
   for ch = 1, 8 do
     bwItemsCache[#bwItemsCache + 1] = {
       label = selectedBand .. ch .. " " .. getFreq(selectedBand, ch),
@@ -691,9 +796,10 @@ local function drawBwUi()
   lcd.clear()
   lcd.drawText(1, 0, "EasyVTXch", BOLD)
   lcd.drawText(70, 0, statusText, SMLSIZE)
+  -- Current settings line
   local ct = getCurrentText()
   if ct ~= "" then
-    lcd.drawText(1, 9, "Now:" .. ct, SMLSIZE)
+    lcd.drawText(1, 9, ct, SMLSIZE)
   end
   lcd.drawText(1, 17, "Band:" .. selectedBand, SMLSIZE + INVERS)
   local items = getBwItems()
@@ -724,12 +830,16 @@ local function handleBwEvent(event)
     local items = getBwItems()
     local item = items[bw.cursor]
     if item then
-      sendChannel(item.band, item.channel)
+      if item.isPower then
+        sendPower(item.powerIdx)
+      else
+        sendChannel(item.band, item.channel)
+      end
     end
   elseif event == EVT_VIRTUAL_ENTER_LONG then
     local items = getBwItems()
     local item = items[bw.cursor]
-    if item then
+    if item and not item.isPower then
       toggleFavorite(item.band, item.channel)
     end
   elseif event == EVT_VIRTUAL_MENU then
@@ -763,11 +873,9 @@ local function run(event, touchState)
     statusText = tostring(err)
     crsf.state = State.ERROR
   end
-  -- Full UI rebuild (lvgl.clear + rebuild)
   if lvgl ~= nil and dirtyAll then
     dirtyAll = false
     buildUi()
-    -- Try to restore focus to selected band button
     local btn = ui.bandBtns[selectedBand]
     if btn then pcall(function() btn:focus() end) end
   end
