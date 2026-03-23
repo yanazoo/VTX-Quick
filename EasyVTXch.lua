@@ -290,7 +290,9 @@ local function parseFieldData(fieldId, d)
   if field.type == TYPE_TEXT_SEL then
     field.options, i = fieldGetString(d, i)
   end
-  if field.type == TYPE_TEXT_SEL or field.type == TYPE_UINT8 then
+  -- types 0-9 are all numeric (UINT8/INT8/UINT16/INT16/.../TEXT_SEL)
+  -- value/min/max are always 1 byte each in CRSF little-endian
+  if field.type <= 9 then
     if i <= #d then field.value = d[i]; i = i + 1 end
     if i <= #d then field.min = d[i]; i = i + 1 end
     if i <= #d then field.max = d[i]; i = i + 1 end
