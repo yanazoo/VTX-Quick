@@ -70,6 +70,8 @@ local crsf = {
   currentBand    = nil,
   currentChannel = nil,
   currentPower   = nil,   -- 0-based index into powerOptions
+  bandOptions    = {},    -- parsed options from band field e.g. {"Off","A","B","E","F","R","L"}
+  bandFieldMin   = 0,     -- min value of band field
   powerOptions   = {},    -- { "25mW", "100mW", ... }
   timer      = 0,
   retryCount = 0,
@@ -332,28 +334,31 @@ local function parseFieldData(fieldId, d)
     if field.type == TYPE_FOLDER and string.find(field.name, "VTX") then
       crsf.vtxFolderId = fieldId
       log("VTX folder found: id=" .. fieldId)
-      if type(field.dynName) == "string" then
-        local b, c = string.match(field.dynName, "%((%a):(%d+)")
-        if b and c then
-          crsf.currentBand = b
-          crsf.currentChannel = tonumber(c)
-          log("dynName band=" .. b .. " ch=" .. c)
-          refreshUi()
-        end
+      -- Parse band/channel from dynName or folder name (e.g. "VTX Admin (R:2:1)")
+      local src = (type(field.dynName) == "string" and field.dynName ~= "") and field.dynName or field.name
+      local b, c = string.match(src, "%((%a):(%d+)")
+      if b and c then
+        crsf.currentBand = b
+        crsf.currentChannel = tonumber(c)
+        log("folder name band=" .. b .. " ch=" .. c)
+        refreshUi()
       end
     elseif crsf.vtxFolderId and field.parent == crsf.vtxFolderId then
       local n = string.lower(field.name)
       if n == "band" then
         crsf.bandFieldId = fieldId
-        log("band field: val=" .. tostring(field.value) .. " min=" .. tostring(field.min))
+        crsf.bandOptions = parsePowerOptions(field.options)
+        crsf.bandFieldMin = field.min or 0
+        log("band field: val=" .. tostring(field.value) .. " min=" .. tostring(field.min) .. " opts=" .. tostring(field.options))
         if field.value ~= nil then
-          local idx = field.value - (field.min or 0) + 1
-          if BAND_NAMES[idx] then
-            crsf.currentBand = BAND_NAMES[idx]
+          local optIdx = field.value - crsf.bandFieldMin + 1
+          local bandName = crsf.bandOptions[optIdx]
+          if bandName and FREQ[bandName] then
+            crsf.currentBand = bandName
             log("currentBand=" .. crsf.currentBand)
             refreshUi()
           else
-            log("band idx out of range: " .. idx)
+            log("band: optIdx=" .. optIdx .. " name=" .. tostring(bandName))
           end
         end
       elseif n == "channel" then
@@ -406,12 +411,11 @@ findVtxFields = function()
     if type(f) == "table" and f.type == TYPE_FOLDER
        and type(f.name) == "string" and string.find(f.name, "VTX") then
       crsf.vtxFolderId = id
-      if type(f.dynName) == "string" then
-        local b, c = string.match(f.dynName, "%((%a):(%d+)")
-        if b and c then
-          crsf.currentBand = b
-          crsf.currentChannel = tonumber(c)
-        end
+      local src = (type(f.dynName) == "string" and f.dynName ~= "") and f.dynName or f.name
+      local b, c = string.match(src, "%((%a):(%d+)")
+      if b and c then
+        crsf.currentBand = b
+        crsf.currentChannel = tonumber(c)
       end
       break
     end
@@ -426,9 +430,12 @@ findVtxFields = function()
       local n = type(f.name) == "string" and string.lower(f.name) or ""
       if n == "band" then
         crsf.bandFieldId = id
+        crsf.bandOptions = parsePowerOptions(f.options)
+        crsf.bandFieldMin = f.min or 0
         if f.value ~= nil then
-          local idx = f.value - (f.min or 0) + 1
-          if BAND_NAMES[idx] then crsf.currentBand = BAND_NAMES[idx] end
+          local optIdx = f.value - crsf.bandFieldMin + 1
+          local bandName = crsf.bandOptions[optIdx]
+          if bandName and FREQ[bandName] then crsf.currentBand = bandName end
         end
       elseif n == "channel" then
         crsf.channelFieldId = id
@@ -486,8 +493,13 @@ local function writeParam(fieldId, value, nextState)
 end
 local function sendChannel(band, ch)
   if crsf.state ~= State.READY then return end
-  local bandVal = BAND_VALUES[band]
-  if not bandVal then return end
+  -- Look up band index from VTX's own band options list
+  local bandVal = nil
+  for i, name in ipairs(crsf.bandOptions) do
+    if name == band then bandVal = crsf.bandFieldMin + i - 1; break end
+  end
+  if bandVal == nil then bandVal = BAND_VALUES[band] end  -- fallback
+  if bandVal == nil then return end
   pending.band = band
   pending.channel = ch
   pending.power = nil
@@ -499,8 +511,12 @@ local function sendPower(pwrIdx)
   if not crsf.powerFieldId then return end
   local band = crsf.currentBand or selectedBand
   local ch = crsf.currentChannel or 1
-  local bandVal = BAND_VALUES[band]
-  if not bandVal then return end
+  local bandVal = nil
+  for i, name in ipairs(crsf.bandOptions) do
+    if name == band then bandVal = crsf.bandFieldMin + i - 1; break end
+  end
+  if bandVal == nil then bandVal = BAND_VALUES[band] end
+  if bandVal == nil then return end
   pending.band = band
   pending.channel = ch
   pending.power = pwrIdx
