@@ -1,6 +1,6 @@
--- toolName = "TNS|EasyVTXch|TNE"
+-- toolName = "TNS|LuaVTXch|TNE"
 --
--- EasyVTXch - Simplified VTX Channel Changer for EdgeTX + ELRS
+-- LuaVTXch - Simplified VTX Channel Changer for EdgeTX + ELRS
 -- One-tap VTX channel/power changing with favorites support.
 -- Requires: EdgeTX 2.11+ (LVGL) for color UI, ELRS TX module
 --
@@ -512,14 +512,16 @@ end
 local function sendPower(pwrIdx)
   if crsf.state ~= State.READY then return end
   if not crsf.powerFieldId then return end
-  local pwrField = crsf.fields[crsf.powerFieldId]
-  local pwrMin = (pwrField and pwrField.min) or 0
+  local band = crsf.currentBand or selectedBand
+  local ch = crsf.currentChannel or 1
+  local bandVal = BAND_VALUES[band]
+  if not bandVal then return end
+  pending.band = band
+  pending.channel = ch
   pending.power = pwrIdx
-  pending.band = nil
-  pending.channel = nil
   local label = crsf.powerOptions[pwrIdx + 1] or tostring(pwrIdx)
   statusText = "Setting " .. label .. "..."
-  writeParam(crsf.powerFieldId, pwrMin + pwrIdx, State.WRITING_POWER)
+  writeParam(crsf.bandFieldId, bandVal, State.WRITING_BAND)
 end
 local function continueApply()
   if crsf.state == State.WRITING_BAND then
@@ -527,7 +529,13 @@ local function continueApply()
     local chanMin = (chanField and chanField.min) or 0
     writeParam(crsf.channelFieldId, chanMin + (pending.channel - 1), State.WRITING_CHAN)
   elseif crsf.state == State.WRITING_CHAN then
-    writeParam(crsf.sendFieldId, LCS_START, State.WRITING_SEND)
+    if pending.power ~= nil and crsf.powerFieldId then
+      local pwrField = crsf.fields[crsf.powerFieldId]
+      local pwrMin = (pwrField and pwrField.min) or 0
+      writeParam(crsf.powerFieldId, pwrMin + pending.power, State.WRITING_POWER)
+    else
+      writeParam(crsf.sendFieldId, LCS_START, State.WRITING_SEND)
+    end
   elseif crsf.state == State.WRITING_POWER then
     writeParam(crsf.sendFieldId, LCS_START, State.WRITING_SEND)
   elseif crsf.state == State.WRITING_SEND then
@@ -644,7 +652,7 @@ local function buildUi()
   local sub = getCurrentText()
   if sub == "" then sub = statusText end
   local page = lvgl.page({
-    title = "EasyVTXch",
+    title = "LuaVTXch",
     subtitle = sub,
     back = function()
       exitScript = true
@@ -794,7 +802,7 @@ local function getBwItems()
 end
 local function drawBwUi()
   lcd.clear()
-  lcd.drawText(1, 0, "EasyVTXch", BOLD)
+  lcd.drawText(1, 0, "LuaVTXch", BOLD)
   lcd.drawText(70, 0, statusText, SMLSIZE)
   -- Current settings line
   local ct = getCurrentText()
