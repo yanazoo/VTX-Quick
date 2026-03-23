@@ -747,7 +747,7 @@ local function buildUi()
       x = MARGIN + col * (chanBtnW + PAD), y = y + row * (chanBtnH + PAD),
       w = chanBtnW, h = chanBtnH,
       text = selectedBand .. c .. "\n" .. getFreq(selectedBand, c),
-      checked = isFavorite(selectedBand, c),
+      checked = isFavorite(selectedBand, c) or (crsf.currentBand == selectedBand and crsf.currentChannel == c),
       visible = isConnected,
       active = isReady,
       press = function() sendChannel(selectedBand, c) end,
