@@ -35,7 +35,7 @@ local FREQ = {
 }
 local FAV_PATH = "/SCRIPTS/TOOLS/easyvtxch.fav"
 local LOG_PATH = "/SCRIPTS/TOOLS/easyvtxch.log"
-local TIMEOUT_PING = 20    -- 20 * 10ms = 200ms per retry (total 2s with 10 retries)
+local TIMEOUT_PING = 10    -- 10 * 10ms = 100ms per retry
 local TIMEOUT_ENUM = 100   -- 100 * 10ms = 1s per field
 local TIMEOUT_WRITE = 15   -- 15 * 10ms = 150ms between writes
 local TIMEOUT_SEND  = 20   -- 20 * 10ms = 200ms for send command
@@ -395,6 +395,20 @@ local function parseParamInfo(data)
     crsf.chunkBuf[#crsf.chunkBuf + 1] = data[i]
   end
   if chunksRemain > 0 then
+    -- Before VTX folder is found: only use chunk 0 to peek at field name.
+    -- Skip remaining chunks for non-VTX fields to avoid slow multi-chunk loads.
+    if not crsf.vtxFolderId then
+      local rawType = crsf.chunkBuf[2]
+      local ft = rawType and (rawType % 128) or 255
+      local fname = fieldGetString(crsf.chunkBuf, 3)
+      local isVtxFolder = (ft == TYPE_FOLDER and fname and string.find(fname, "VTX"))
+      if not isVtxFolder then
+        -- Not a VTX folder — skip remaining chunks and move on
+        log("skip chunks for field " .. fieldId .. " (" .. tostring(fname) .. ")")
+        requestNextField()
+        return
+      end
+    end
     crsf.chunkIdx = crsf.chunkIdx + 1
     crsfPush(CMD_PARAM_READ, {
       crsf.deviceId, crsf.handsetId, fieldId, crsf.chunkIdx
