@@ -10,12 +10,24 @@ local LS,LC=1,4
 local TP,TE,TW,TS,RM=10,100,15,20,5
 local S={PI=1,EN=2,RY=3,WB=4,WC=5,WS=6,CF=7,DN=8}
 local v={s=S.PI,di=EA,hi=EL,fc=0,li=0,cb={},ci=0,
-         vf=nil,bf=nil,cf=nil,sf=nil,bm=0,cm=0,t=0,rc=0}
+         vf=nil,bf=nil,cf=nil,sf=nil,bm=0,bo="",cm=0,t=0,rc=0}
 
 local function push(c,d) if crossfireTelemetryPush then crossfireTelemetryPush(c,d) end end
 local function pop()     if crossfireTelemetryPop  then return crossfireTelemetryPop() end end
 local function gs(d,i)   local s="" while d[i]and d[i]~=0 do s=s..string.char(d[i]);i=i+1 end return s,i+1 end
 local function wp(id,val,ns) push(WR,{v.di,v.hi,id,val});v.s=ns;v.t=getTime() end
+
+-- バンドオプション文字列からバンド名のインデックスを解決
+local function bandVal()
+  if v.bo~="" then
+    local idx=v.bm
+    for opt in string.gmatch(v.bo..";","([^;]*);") do
+      if opt==BAND then return idx end
+      idx=idx+1
+    end
+  end
+  return v.bm+(BV[BAND]or 1)-1  -- フォールバック
+end
 
 local rn
 local function rf(id) v.li=id;v.cb={};v.ci=0;push(RD,{v.di,v.hi,id,0});v.t=getTime() end
@@ -26,7 +38,7 @@ local function pdi(d)
   if not d or #d<3 or d[2]~=EA then return end
   v.di=d[2];local _,o=gs(d,3);v.fc=(o+12<=#d)and d[o+12]or 0
   if v.fc==0 then v.s=S.DN;return end
-  v.s=S.EN;v.li=0;v.vf=nil;v.bf=nil;v.cf=nil;v.sf=nil
+  v.s=S.EN;v.li=0;v.vf=nil;v.bf=nil;v.cf=nil;v.sf=nil;v.bo=""
   rn()
 end
 
@@ -34,15 +46,19 @@ local function pfd(id,d)
   if type(d)~="table"or #d<3 then return end
   local i=1;local pa=d[i];i=i+1;if pa==0 then pa=nil end
   local ft=d[i]%128;i=i+1;local nm;nm,i=gs(d,i)
-  if ft==9 then local _;_,i=gs(d,i) end
+  local opts=""
+  if ft==9 then opts,i=gs(d,i) end          -- オプション文字列を保存
   local fm=0;if ft<=9 then i=i+1;fm=d[i]or 0;i=i+1 end
   if type(nm)~="string" then return end
-  if ft==11 and string.find(nm,"VTX") then v.vf=id
+  -- VTXフォルダは大文字小文字を問わず検索
+  if ft==11 and string.find(string.upper(nm),"VTX") then v.vf=id
   elseif v.vf and pa==v.vf then
     local n=string.lower(nm)
-    if     n=="band"           then v.bf=id;v.bm=fm
-    elseif n=="channel"        then v.cf=id;v.cm=fm
-    elseif string.find(n,"send") then v.sf=id end
+    if     n=="band"  then v.bf=id;v.bm=fm;v.bo=opts  -- オプション保存
+    elseif n=="channel" then v.cf=id;v.cm=fm
+    elseif string.find(n,"send") or string.find(n,"apply") or string.find(n,"save") then
+      v.sf=id
+    end
   end
 end
 
@@ -53,7 +69,8 @@ local function ppi(d)
   if rm>0 then
     if not v.vf then
       local ft=v.cb[2]and(v.cb[2]%128)or 255
-      if not(ft==11 and string.find(gs(v.cb,3)or"","VTX"))then rn();return end
+      local nm=gs(v.cb,3)or""
+      if not(ft==11 and string.find(string.upper(nm),"VTX"))then rn();return end
     end
     v.ci=v.ci+1;push(RD,{v.di,v.hi,id,v.ci});v.t=getTime();return
   end
@@ -89,11 +106,11 @@ local function proc()
   end
 end
 
-local function init() v.t=getTime();v.s=S.PI;push(PING,{0x00,ER}) end
+local function init() v.t=getTime();v.s=S.PI;v.rc=0;push(PING,{0x00,ER}) end
 local function run()
   if v.s==S.DN then return end
   proc()
-  if v.s==S.RY then wp(v.bf,v.bm+(BV[BAND]-1),S.WB) end
+  if v.s==S.RY then wp(v.bf,bandVal(),S.WB) end
 end
 
 return {init=init,run=run}
