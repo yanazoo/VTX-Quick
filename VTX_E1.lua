@@ -1,13 +1,14 @@
 -- VTX_E1.lua  5705 MHz
 -- /SCRIPTS/FUNCTIONS/ に置き、スペシャルファンクションで割り当てる
+-- background() でバックグラウンド列挙 → スイッチONで即座に書き込み
 
 local BAND, CH = "E", 1
 
-local BV={A=1,B=2,E=3,F=4,R=5}
 local EA,EL,ER=0xEE,0xEF,0xEA
 local PING,DI,PR,RD,WR=0x28,0x29,0x2B,0x2C,0x2D
 local LS,LC=1,4
 local TP,TE,TW,TS,RM=10,100,15,20,5
+local BV={A=1,B=2,E=3,F=4,R=5}
 local S={PI=1,EN=2,RY=3,WB=4,WC=5,WS=6,CF=7,DN=8}
 local v={s=S.PI,di=EA,hi=EL,fc=0,li=0,cb={},ci=0,
          vf=nil,bf=nil,cf=nil,sf=nil,bm=0,bo="",cm=0,t=0,rc=0}
@@ -47,17 +48,15 @@ local function pfd(id,d)
   local i=1;local pa=d[i];i=i+1;if pa==0 then pa=nil end
   local ft=d[i]%128;i=i+1;local nm;nm,i=gs(d,i)
   local opts=""
-  if ft==9 then opts,i=gs(d,i) end          -- オプション文字列を保存
+  if ft==9 then opts,i=gs(d,i) end
   local fm=0;if ft<=9 then i=i+1;fm=d[i]or 0;i=i+1 end
   if type(nm)~="string" then return end
-  -- VTXフォルダは大文字小文字を問わず検索
   if ft==11 and string.find(string.upper(nm),"VTX") then v.vf=id
   elseif v.vf and pa==v.vf then
     local n=string.lower(nm)
-    if     n=="band"  then v.bf=id;v.bm=fm;v.bo=opts  -- オプション保存
+    if     n=="band"    then v.bf=id;v.bm=fm;v.bo=opts
     elseif n=="channel" then v.cf=id;v.cm=fm
-    elseif string.find(n,"send") or string.find(n,"apply") or string.find(n,"save") then
-      v.sf=id
+    elseif string.find(n,"send")or string.find(n,"apply")or string.find(n,"save") then v.sf=id
     end
   end
 end
@@ -106,11 +105,31 @@ local function proc()
   end
 end
 
-local function init() v.t=getTime();v.s=S.PI;v.rc=0;push(PING,{0x00,ER}) end
-local function run()
-  if v.s==S.DN then return end
-  proc()
-  if v.s==S.RY then wp(v.bf,bandVal(),S.WB) end
+-- background: スイッチOFF中に呼ばれる
+-- PING/ENUM を進め、DONE後はREADYに戻してスイッチ再トリガーを可能にする
+local function background()
+  if v.s~=S.RY then proc() end
+  if v.s==S.DN then
+    if v.bf and v.cf and v.sf then
+      v.s=S.RY          -- フィールド発見済み → READYに戻す
+    else
+      -- フィールド未発見 → 再PING
+      v.s=S.PI;v.rc=0;push(PING,{0x00,ER});v.t=getTime()
+    end
+  end
 end
 
-return {init=init,run=run}
+-- run: スイッチON中に呼ばれる
+-- READY なら書き込み開始、WRITING中は応答処理
+local function run()
+  proc()
+  if v.s==S.RY and v.bf and v.cf and v.sf then
+    wp(v.bf,bandVal(),S.WB)
+  end
+end
+
+local function init()
+  v.t=getTime();v.s=S.PI;v.rc=0;push(PING,{0x00,ER})
+end
+
+return {init=init,run=run,background=background}
