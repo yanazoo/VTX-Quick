@@ -1,6 +1,6 @@
--- toolName = "TNS|LuaVTXch|TNE"
+-- toolName = "TNS|VTXQuick|TNE"
 --
--- LuaVTXch - Simplified VTX Channel Changer for EdgeTX + ELRS
+-- VTX Quick - Simplified VTX Channel Changer for EdgeTX + ELRS
 -- One-tap VTX channel/power changing with favorites support.
 -- Requires: EdgeTX 2.11+ (LVGL) for color UI, ELRS TX module
 --
@@ -33,8 +33,8 @@ local FREQ = {
   F = { 5740, 5760, 5780, 5800, 5820, 5840, 5860, 5880 },
   R = { 5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917 },
 }
-local FAV_PATH = "/SCRIPTS/TOOLS/easyvtxch.fav"
-local LOG_PATH = "/SCRIPTS/TOOLS/easyvtxch.log"
+local FAV_PATH = "/SCRIPTS/TOOLS/vtxquick.fav"
+local LOG_PATH = "/SCRIPTS/TOOLS/vtxquick.log"
 local TIMEOUT_PING = 10    -- 10 * 10ms = 100ms per retry
 local TIMEOUT_ENUM = 100   -- 100 * 10ms = 1s per field
 local TIMEOUT_WRITE = 15   -- 15 * 10ms = 150ms between writes
@@ -661,7 +661,7 @@ local function buildUi()
   local sub = getCurrentText()
   if sub == "" then sub = statusText end
   local page = lvgl.page({
-    title = "LuaVTXch",
+    title = "VTX Quick",
     subtitle = sub,
     back = function()
       exitScript = true
@@ -811,7 +811,7 @@ local function getBwItems()
 end
 local function drawBwUi()
   lcd.clear()
-  lcd.drawText(1, 0, "LuaVTXch", BOLD)
+  lcd.drawText(1, 0, "VTX Quick", BOLD)
   lcd.drawText(70, 0, statusText, SMLSIZE)
   -- Current settings line
   local ct = getCurrentText()
