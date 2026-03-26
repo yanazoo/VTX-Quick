@@ -108,9 +108,15 @@ local function proc()
   end
 end
 
--- スイッチOFF中: firedフラグをリセットするだけ
+-- スイッチOFF中: 書き込みシーケンス中なら完走させ、完了後にfiredをリセット
+-- これにより: (1)スイッチを離しても書き込みが途中で止まらない
+--             (2)Anモード(continuous)ではプロポ起動時にスイッチON位置でrun()が即呼ばれる
 local function background()
-  fired=false
+  if v.s>=S.WB and v.s<=S.CF then
+    proc()   -- 書き込みシーケンスを完走させる
+  else
+    fired=false  -- DONE/READY/PING/ENUM状態のときだけリセット
+  end
 end
 
 -- スイッチON中: 初回呼び出しでPING→列挙→書き込みを一から開始
