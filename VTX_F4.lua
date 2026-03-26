@@ -1,30 +1,33 @@
 -- VTX_F4.lua  5800 MHz
 -- /SCRIPTS/FUNCTIONS/ に置き、スペシャルファンクションで割り当てる
--- background() でバックグラウンド列挙 → スイッチONで即座に書き込み
+-- スイッチONのたびにPING→列挙→書き込みを最初からやり直す (VTXQuickと同じ挙動)
 
 local BAND, CH = "F", 4
 
 local EA,EL,ER=0xEE,0xEF,0xEA
 local PING,DI,PR,RD,WR=0x28,0x29,0x2B,0x2C,0x2D
 local LS,LC=1,4
-local TP,TE,TW,TS,RM=10,100,15,20,5
+local TP,TE,TW,TS,RM=10,100,15,20,10
 local BV={A=1,B=2,E=3,F=4,R=5}
 local S={PI=1,EN=2,RY=3,WB=4,WC=5,WS=6,CF=7,DN=8}
-local v={s=S.PI,di=EA,hi=EL,fc=0,li=0,cb={},ci=0,
+local v={s=S.DN,di=EA,hi=EL,fc=0,li=0,cb={},ci=0,
          vf=nil,bf=nil,cf=nil,sf=nil,bm=0,bo="",cm=0,t=0,rc=0}
+local fired=false  -- スイッチON中に1回だけ動かすためのフラグ
 
 local function push(c,d) if crossfireTelemetryPush then crossfireTelemetryPush(c,d) end end
 local function pop()     if crossfireTelemetryPop  then return crossfireTelemetryPop() end end
 local function gs(d,i)   local s="" while d[i]and d[i]~=0 do s=s..string.char(d[i]);i=i+1 end return s,i+1 end
 local function wp(id,val,ns) push(WR,{v.di,v.hi,id,val});v.s=ns;v.t=getTime() end
 
--- バンドオプション文字列からバンド名のインデックスを解決
+-- バンドオプション文字列からバンド名のインデックスを解決 (VTXのオプションリストを検索)
 local function bandVal()
   if v.bo~="" then
     local idx=v.bm
     for opt in string.gmatch(v.bo..";","([^;]*);") do
-      if opt==BAND then return idx end
-      idx=idx+1
+      if opt~="" then  -- 空エントリはスキップ (VTXQuickと同じ挙動)
+        if opt==BAND then return idx end
+        idx=idx+1
+      end
     end
   end
   return v.bm+(BV[BAND]or 1)-1  -- フォールバック
@@ -105,23 +108,22 @@ local function proc()
   end
 end
 
--- background: スイッチOFF中に呼ばれる
--- PING/ENUM を進め、DONE後はREADYに戻してスイッチ再トリガーを可能にする
+-- スイッチOFF中: firedフラグをリセットするだけ
 local function background()
-  if v.s~=S.RY then proc() end
-  if v.s==S.DN then
-    if v.bf and v.cf and v.sf then
-      v.s=S.RY          -- フィールド発見済み → READYに戻す
-    else
-      -- フィールド未発見 → 再PING
-      v.s=S.PI;v.rc=0;push(PING,{0x00,ER});v.t=getTime()
-    end
-  end
+  fired=false
 end
 
--- run: スイッチON中に呼ばれる
--- READY なら書き込み開始、WRITING中は応答処理
+-- スイッチON中: 初回呼び出しでPING→列挙→書き込みを一から開始
+-- VTXQuickと同様に毎回列挙することでELRSモジュールが確実にsaveコマンドを発行する
 local function run()
+  if not fired then
+    fired=true
+    -- 状態を完全リセットして新規PING開始 (VTXQuickがオープン時にやることと同じ)
+    v.s=S.PI;v.rc=0
+    v.vf=nil;v.bf=nil;v.cf=nil;v.sf=nil
+    v.bo="";v.li=0;v.fc=0;v.cb={};v.ci=0
+    push(PING,{0x00,ER});v.t=getTime()
+  end
   proc()
   if v.s==S.RY and v.bf and v.cf and v.sf then
     wp(v.bf,bandVal(),S.WB)
@@ -129,7 +131,7 @@ local function run()
 end
 
 local function init()
-  v.t=getTime();v.s=S.PI;v.rc=0;push(PING,{0x00,ER})
+  v.t=getTime()
 end
 
 return {init=init,run=run,background=background}
