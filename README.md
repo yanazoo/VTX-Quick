@@ -49,9 +49,6 @@ Copy files to your SD card:
 | SF2 | SW2↓ | VTX_R3 | R3 5732 MHz |
 | SF3 | SW3↓ | VTX_R4 | R4 5769 MHz |
 | SF4 | SW4↓ | VTX_R5 | R5 5806 MHz |
-| SF5 | SW5↓ | VTX_E1 | E1 5705 MHz |
-| SF6 | SW6↓ | VTX_F1 | F1 5740 MHz |
-| SF7 | SW6↑ | VTX_F4 | F4 5800 MHz |
 
 > **実行モード「An」（continuous）を選択してください。**
 > スイッチが ON の間ずっと `run()` が呼ばれますが、内部フラグで1サイクルのみ実行されます。
