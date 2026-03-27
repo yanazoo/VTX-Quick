@@ -43,7 +43,7 @@ Copy files to your SD card:
 ### スイッチスクリプト / Switch Scripts
 
 1. TX15MAX の **MDL → スペシャルファンクション** を開く
-2. 空きスロットに以下を設定（**実行モードは「An」を選択**）
+2. 空きスロットに以下を設定
 
 | スロット | スイッチ | スクリプト | チャンネル |
 |----------|----------|-----------|------------|
@@ -55,13 +55,8 @@ Copy files to your SD card:
 | SF6 | SW6↓ | VTX_F1 | F1 5740 MHz |
 | SF7 | SW6↑ | VTX_F4 | F4 5800 MHz |
 
-> **実行モード「An」（continuous）を選択してください。**
-> スイッチが ON の間ずっと `run()` が呼ばれますが、内部フラグで1サイクルのみ実行されます。
-> 「An」にすることで、**プロポ起動時にスイッチが既にON位置にある場合も自動でチャンネルが設定されます。**
->
-> **Set the execution mode to "An" (continuous).**
-> `run()` is called every frame while the switch is ON, but an internal flag ensures only one cycle executes per activation.
-> With "An" mode, **the VTX channel is also set automatically at radio startup if the switch is already in the ON position.**
+> スイッチが ON になった瞬間に対応チャンネルへ1回だけ切り替えます。
+> The channel switches once the moment a switch turns ON.
 
 ### タッチUIツール / Touch UI Tool
 
