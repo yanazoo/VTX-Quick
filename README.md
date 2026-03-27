@@ -14,10 +14,8 @@ One-tap VTX channel switching scripts for EdgeTX + ELRS.
 | `VTX_R3.lua` | スイッチ割り当て用 R3 5732 MHz |
 | `VTX_R4.lua` | スイッチ割り当て用 R4 5769 MHz |
 | `VTX_R5.lua` | スイッチ割り当て用 R5 5806 MHz |
-| `VTX_E1.lua` | スイッチ割り当て用 E1 5705 MHz |
-| `VTX_F1.lua` | スイッチ割り当て用 F1 5740 MHz |
-| `VTX_F4.lua` | スイッチ割り当て用 F4 5800 MHz |
 
+※システムの関係上Luaファイルつまでがよいです。
 ---
 
 ## インストール / Installation
