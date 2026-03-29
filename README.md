@@ -1,27 +1,27 @@
 # VTX Quick
 
 EdgeTX + ELRS 環境で VTX チャンネルをスイッチ一発で切り替える Lua スクリプト集。
-One-tap VTX channel switching scripts for EdgeTX + ELRS.
 
 ---
 
-## ファイル構成 / Files
+## ファイル構成
 
-| File | 用途 |
-|------|------|
-| `VTXQuick.lua` | タッチUIツール（Tools メニュー）全チャンネル・出力変更 |
-| `VTX_R2.lua` | スイッチ割り当て用 R2 5695 MHz |
-| `VTX_R3.lua` | スイッチ割り当て用 R3 5732 MHz |
-| `VTX_R4.lua` | スイッチ割り当て用 R4 5769 MHz |
-| `VTX_R5.lua` | スイッチ割り当て用 R5 5806 MHz |
+| ファイル | 配置場所 | 用途 |
+|----------|----------|------|
+| `VTXQuick.lua` | `/SCRIPTS/TOOLS/` | タッチ UI ツール（Tools メニュー）バンド・チャンネル・出力をまとめて変更 |
+| `VTX_R2.lua` | `/SCRIPTS/FUNCTIONS/` | スイッチ割り当て用　Race 2ch　5695 MHz |
+| `VTX_R3.lua` | `/SCRIPTS/FUNCTIONS/` | スイッチ割り当て用　Race 3ch　5732 MHz |
+| `VTX_R4.lua` | `/SCRIPTS/FUNCTIONS/` | スイッチ割り当て用　Race 4ch　5769 MHz |
+| `VTX_R5.lua` | `/SCRIPTS/FUNCTIONS/` | スイッチ割り当て用　Race 5ch　5806 MHz |
+| `VTX_E1.lua` | `/SCRIPTS/FUNCTIONS/` | スイッチ割り当て用　Europ 1ch　5705 MHz |
+| `VTX_F1.lua` | `/SCRIPTS/FUNCTIONS/` | スイッチ割り当て用　FatShark 1ch　5740 MHz |
+| `VTX_F4.lua` | `/SCRIPTS/FUNCTIONS/` | スイッチ割り当て用　FatShark 4ch　5800 MHz |
 
-※システムの関係上Luaファイルの設定は４個までがよいです。
 ---
 
-## インストール / Installation
+## インストール
 
-SDカードの以下のパスに配置してください。
-Copy files to your SD card:
+SD カードの以下のパスにコピーしてください。
 
 ```
 /SCRIPTS/TOOLS/VTXQuick.lua
@@ -36,51 +36,63 @@ Copy files to your SD card:
 
 ---
 
-## TX15MAX 設定方法 / TX15MAX Radio Setup
+## TX15MAX 設定方法
 
-### スイッチスクリプト / Switch Scripts
+### スイッチスクリプト（VTX_Rxx / VTX_Exx / VTX_Fxx）
 
-1. TX15MAX の **MDL → スペシャルファンクション** を開く
-2. 空きスロットに以下を設定（**実行モードは「On」を選択**）
+1. **MDL → スペシャルファンクション** を開く
+2. 使用したいスロットに以下を設定する
+
+| 項目 | 設定値 |
+|------|--------|
+| スイッチ | 使用するスイッチ・方向を選択 |
+| スクリプト | 対応する VTX_Xxx を選択 |
+| **実行モード** | **`1x`** |
+
+> **実行モードは必ず `1x` を選択してください。**
+> スイッチの立ち上がりエッジで 1 回だけ `run()` が呼ばれ、
+> その後の書き込み完走・次回プッシュの準備は `background()` が自動で行います。
+
+#### 設定例
 
 | スロット | スイッチ | スクリプト | チャンネル |
 |----------|----------|-----------|------------|
-| SF1 | SW1↓ | VTX_R2 | R2 5695 MHz |
-| SF2 | SW2↓ | VTX_R3 | R3 5732 MHz |
-| SF3 | SW3↓ | VTX_R4 | R4 5769 MHz |
-| SF4 | SW4↓ | VTX_R5 | R5 5806 MHz |
+| SF1 | SA↓ | VTX_R2 | Race 2　5695 MHz |
+| SF2 | SA↑ | VTX_R3 | Race 3　5732 MHz |
+| SF3 | SB↓ | VTX_R4 | Race 4　5769 MHz |
+| SF4 | SB↑ | VTX_R5 | Race 5　5806 MHz |
 
-> **実行モード「An」（continuous）を選択してください。**
-> スイッチが ON の間ずっと `run()` が呼ばれますが、内部フラグで1サイクルのみ実行されます。
-> 「An」にすることで、**プロポ起動時にスイッチが既にON位置にある場合も自動でチャンネルが設定されます。**
->
-> **Set the execution mode to "An" (continuous).**
-> `run()` is called every frame while the switch is ON, but an internal flag ensures only one cycle executes per activation.
-> With "An" mode, **the VTX channel is also set automatically at radio startup if the switch is already in the ON position.**
-
-### タッチUIツール / Touch UI Tool
+### タッチ UI ツール（VTXQuick）
 
 1. **Tools メニュー** から `VTXQuick` を起動
-2. タッチで任意のチャンネル・出力を変更
-
-Open `VTXQuick` from the **Tools menu** to change any channel or power level via touch UI.
+2. タッチでバンド・チャンネル・出力を自由に変更
 
 ---
 
-## 設計 / Design
+## 動作の仕組み
 
-- スイッチの ON/OFF 検知は **EdgeTX（スペシャルファンクション）側に委譲**
-- 各スクリプトは「接続 → チャンネル送信 → 完了」のみ実行（99行・ミニマル実装）
-- 監視ループ・設定ファイル・ログなし
+### スイッチスクリプトの動作フロー
 
-Switch ON/OFF detection is fully delegated to EdgeTX Special Functions.
-Each script performs only: connect → send channel → done (99 lines, minimal).
-No monitoring loop, no config file, no logging.
+```
+プロポ起動
+  └─ init()：ELRS モジュールへ PING 送信、フィールド列挙を開始
+
+スイッチ未操作（毎フレーム background() が動く）
+  ├─ 列挙中（PI/EN）    → 応答を受け取りフィールド情報を収集
+  ├─ 列挙完了（RY）     → スイッチ操作待ち
+  ├─ 書き込み中（WB〜CF）→ 書き込みシーケンスを完走させる
+  └─ 書き込み完了（DN） → 再列挙を開始し次回プッシュに備える
+
+スイッチ操作（1x で run() が 1 回だけ呼ばれる）
+  ├─ 列挙完了済み（RY） → 即バンド・チャンネル書き込み開始
+  └─ まだ列挙中         → trigger フラグをセット
+                            列挙完了次第 background() が自動で書き込み開始
+```
 
 ---
 
-## 動作環境 / Requirements
+## 動作環境
 
-- EdgeTX 2.11+
+- EdgeTX 2.11 以上
 - ELRS TX モジュール（CRSF 接続）
 - RadioMaster TX15 MAX（他の EdgeTX 対応機でも動作可）
