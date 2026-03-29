@@ -1,33 +1,30 @@
 -- VTX_R4.lua  5769 MHz
 -- /SCRIPTS/FUNCTIONS/ に置き、スペシャルファンクションで割り当てる
--- スイッチONのたびにPING→列挙→書き込みを最初からやり直す (VTXQuickと同じ挙動)
 
 local BAND, CH = "R", 4
 
+local BV={A=1,B=2,E=3,F=4,R=5}
 local EA,EL,ER=0xEE,0xEF,0xEA
 local PING,DI,PR,RD,WR=0x28,0x29,0x2B,0x2C,0x2D
 local LS,LC=1,4
-local TP,TE,TW,TS,RM=10,100,15,20,10
-local BV={A=1,B=2,E=3,F=4,R=5}
+local TP,TE,TW,TS,RM=10,100,15,20,5
 local S={PI=1,EN=2,RY=3,WB=4,WC=5,WS=6,CF=7,DN=8}
 local v={s=S.DN,di=EA,hi=EL,fc=0,li=0,cb={},ci=0,
          vf=nil,bf=nil,cf=nil,sf=nil,bm=0,bo="",cm=0,t=0,rc=0}
-local fired=false  -- スイッチON中に1回だけ動かすためのフラグ
+local fired=false
 
 local function push(c,d) if crossfireTelemetryPush then crossfireTelemetryPush(c,d) end end
 local function pop()     if crossfireTelemetryPop  then return crossfireTelemetryPop() end end
 local function gs(d,i)   local s="" while d[i]and d[i]~=0 do s=s..string.char(d[i]);i=i+1 end return s,i+1 end
 local function wp(id,val,ns) push(WR,{v.di,v.hi,id,val});v.s=ns;v.t=getTime() end
 
--- バンドオプション文字列からバンド名のインデックスを解決 (VTXのオプションリストを検索)
+-- バンドオプション文字列からバンド名のインデックスを解決
 local function bandVal()
   if v.bo~="" then
     local idx=v.bm
     for opt in string.gmatch(v.bo..";","([^;]*);") do
-      if opt~="" then  -- 空エントリはスキップ (VTXQuickと同じ挙動)
-        if opt==BAND then return idx end
-        idx=idx+1
-      end
+      if opt==BAND then return idx end
+      idx=idx+1
     end
   end
   return v.bm+(BV[BAND]or 1)-1  -- フォールバック
@@ -51,15 +48,17 @@ local function pfd(id,d)
   local i=1;local pa=d[i];i=i+1;if pa==0 then pa=nil end
   local ft=d[i]%128;i=i+1;local nm;nm,i=gs(d,i)
   local opts=""
-  if ft==9 then opts,i=gs(d,i) end
+  if ft==9 then opts,i=gs(d,i) end          -- オプション文字列を保存
   local fm=0;if ft<=9 then i=i+1;fm=d[i]or 0;i=i+1 end
   if type(nm)~="string" then return end
+  -- VTXフォルダは大文字小文字を問わず検索
   if ft==11 and string.find(string.upper(nm),"VTX") then v.vf=id
   elseif v.vf and pa==v.vf then
     local n=string.lower(nm)
-    if     n=="band"    then v.bf=id;v.bm=fm;v.bo=opts
+    if     n=="band"  then v.bf=id;v.bm=fm;v.bo=opts  -- オプション保存
     elseif n=="channel" then v.cf=id;v.cm=fm
-    elseif string.find(n,"send")or string.find(n,"apply")or string.find(n,"save") then v.sf=id
+    elseif string.find(n,"send") or string.find(n,"apply") or string.find(n,"save") then
+      v.sf=id
     end
   end
 end
@@ -67,6 +66,7 @@ end
 local function ppi(d)
   if not d or #d<5 or d[2]~=v.di then return end
   local id,rm=d[3],d[4]
+  if id~=v.li then return end  -- 自分がリクエストしたフィールドの応答のみ受け入れる
   for i=5,#d do v.cb[#v.cb+1]=d[i] end
   if rm>0 then
     if not v.vf then
@@ -108,36 +108,25 @@ local function proc()
   end
 end
 
--- スイッチOFF中: 書き込みシーケンス中なら完走させ、完了後にfiredをリセット
--- これにより: (1)スイッチを離しても書き込みが途中で止まらない
---             (2)Anモード(continuous)ではプロポ起動時にスイッチON位置でrun()が即呼ばれる
-local function background()
-  if v.s>=S.WB and v.s<=S.CF then
-    proc()   -- 書き込みシーケンスを完走させる
-  else
-    fired=false  -- DONE/READY/PING/ENUM状態のときだけリセット
-  end
-end
+local function init() v.t=getTime() end
 
--- スイッチON中: 初回呼び出しでPING→列挙→書き込みを一から開始
--- VTXQuickと同様に毎回列挙することでELRSモジュールが確実にsaveコマンドを発行する
+-- スイッチOFF中: 次のトリガーを受け付けるためにfiredをリセット
+local function background() fired=false end
+
+-- スイッチON中: 初回呼び出しでバッファフラッシュ→PING→列挙→書き込みを実行
+-- (1xモード: スイッチを押している間、毎フレーム呼ばれる)
 local function run()
   if not fired then
     fired=true
-    -- 状態を完全リセットして新規PING開始 (VTXQuickがオープン時にやることと同じ)
+    repeat local c,d=pop() until not c  -- 他スクリプトの残留メッセージを除去
     v.s=S.PI;v.rc=0
     v.vf=nil;v.bf=nil;v.cf=nil;v.sf=nil
     v.bo="";v.li=0;v.fc=0;v.cb={};v.ci=0
     push(PING,{0x00,ER});v.t=getTime()
   end
+  if v.s==S.DN then return end
   proc()
-  if v.s==S.RY and v.bf and v.cf and v.sf then
-    wp(v.bf,bandVal(),S.WB)
-  end
-end
-
-local function init()
-  v.t=getTime()
+  if v.s==S.RY and v.bf and v.cf and v.sf then wp(v.bf,bandVal(),S.WB) end
 end
 
 return {init=init,run=run,background=background}
