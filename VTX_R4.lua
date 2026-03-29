@@ -65,6 +65,7 @@ end
 local function ppi(d)
   if not d or #d<5 or d[2]~=v.di then return end
   local id,rm=d[3],d[4]
+  if id~=v.li then return end  -- 自分がリクエストしたフィールドの応答のみ受け入れる
   for i=5,#d do v.cb[#v.cb+1]=d[i] end
   if rm>0 then
     if not v.vf then
