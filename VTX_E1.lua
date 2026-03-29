@@ -9,9 +9,9 @@ local PING,DI,PR,RD,WR=0x28,0x29,0x2B,0x2C,0x2D
 local LS,LC=1,4
 local TP,TE,TW,TS,RM=10,100,15,20,5
 local S={PI=1,EN=2,RY=3,WB=4,WC=5,WS=6,CF=7,DN=8}
-local v={s=S.DN,di=EA,hi=EL,fc=0,li=0,cb={},ci=0,
+local v={s=S.PI,di=EA,hi=EL,fc=0,li=0,cb={},ci=0,
          vf=nil,bf=nil,cf=nil,sf=nil,bm=0,bo="",cm=0,t=0,rc=0}
-local fired=false
+local trigger=false
 
 local function push(c,d) if crossfireTelemetryPush then crossfireTelemetryPush(c,d) end end
 local function pop()     if crossfireTelemetryPop  then return crossfireTelemetryPop() end end
@@ -108,25 +108,37 @@ local function proc()
   end
 end
 
-local function init() v.t=getTime() end
+-- ブート時に列挙を開始する
+local function init() v.t=getTime();v.s=S.PI;v.rc=0;push(PING,{0x00,ER}) end
 
--- スイッチOFF中: 次のトリガーを受け付けるためにfiredをリセット
-local function background() fired=false end
-
--- スイッチON中: 初回呼び出しでバッファフラッシュ→PING→列挙→書き込みを実行
--- (1xモード: スイッチを押している間、毎フレーム呼ばれる)
-local function run()
-  if not fired then
-    fired=true
-    repeat local c,d=pop() until not c  -- 他スクリプトの残留メッセージを除去
-    v.s=S.PI;v.rc=0
-    v.vf=nil;v.bf=nil;v.cf=nil;v.sf=nil
+-- スイッチOFF中（1xモードでは run() 後もここに来る）:
+--   列挙進行・書き込み完走・DN後の再列挙・triggerによる書き込み開始 を担当
+local function background()
+  if v.s==S.PI or v.s==S.EN then
+    proc()                                      -- 列挙を進める
+  elseif v.s==S.RY then
+    if trigger then                             -- run()が早すぎた場合の救済
+      trigger=false;wp(v.bf,bandVal(),S.WB)
+    end
+  elseif v.s>=S.WB and v.s<=S.CF then
+    proc()                                      -- 書き込みシーケンスを完走させる
+  elseif v.s==S.DN then
+    trigger=false
+    -- 次のプッシュのために再列挙を開始
+    v.s=S.PI;v.rc=0;v.vf=nil;v.bf=nil;v.cf=nil;v.sf=nil
     v.bo="";v.li=0;v.fc=0;v.cb={};v.ci=0
     push(PING,{0x00,ER});v.t=getTime()
   end
-  if v.s==S.DN then return end
-  proc()
-  if v.s==S.RY and v.bf and v.cf and v.sf then wp(v.bf,bandVal(),S.WB) end
+end
+
+-- 1xモード: スイッチ立ち上がりで1回だけ呼ばれる
+-- RY状態なら即書き込み開始、まだ列挙中なら trigger フラグを立てて background() に委ねる
+local function run()
+  if v.s==S.RY and v.bf and v.cf and v.sf then
+    wp(v.bf,bandVal(),S.WB)
+  else
+    trigger=true
+  end
 end
 
 return {init=init,run=run,background=background}
