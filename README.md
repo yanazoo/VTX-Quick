@@ -96,3 +96,9 @@ SD カードの以下のパスにコピーしてください。
 - EdgeTX 2.11 以上
 - ELRS TX モジュール（CRSF 接続）
 - RadioMaster TX15 MAX（他の EdgeTX 対応機でも動作可）
+
+---
+
+## License
+
+MIT
